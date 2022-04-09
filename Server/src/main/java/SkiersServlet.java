@@ -10,6 +10,7 @@ import io.swagger.client.model.SkierVertical;
 import io.swagger.client.model.SkierVerticalResorts;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -26,8 +27,9 @@ import javax.servlet.http.HttpServletResponse;
 public class SkiersServlet extends HttpServlet {
 
   private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
-  private final String QUEUE_NAME = "liftride";
-  private final Integer NUM_CHANNELS = 100;
+  private final String EXCHANGE_NAME = "liftride";
+  private final String POST_ROUTING_KEY = "liftride.*";
+  private final Integer NUM_CHANNELS = 256;
   private Connection conn;
   private BlockingQueue<Channel> pool;
 
@@ -59,7 +61,7 @@ public class SkiersServlet extends HttpServlet {
     for (int i = 0; i < NUM_CHANNELS; i++) {
       try {
         Channel channel = conn.createChannel();
-        channel.queueDeclare(QUEUE_NAME, false, false, false, null);
+        channel.exchangeDeclare(EXCHANGE_NAME, "fanout");
 
         pool.add(channel);
       } catch (Exception e) {
@@ -138,19 +140,26 @@ public class SkiersServlet extends HttpServlet {
       Integer skierID = Integer.parseInt(urlParts[7]);
       Integer day = Integer.parseInt(urlParts[5]);
       Integer seasonID = Integer.parseInt(urlParts[3]);
+      Integer resortID = Integer.parseInt(urlParts[1]);
 
-      JsonObject message = createMessage(body, skierID, day, seasonID);
+      JsonObject message = createMessage(body, skierID, day, seasonID, resortID);
 
       try {
         Channel channel = pool.take();
 
-        channel.basicPublish("", QUEUE_NAME, null, gson.toJson(message).getBytes());
+        System.out.println(pool.size());
+        channel.basicPublish(
+            EXCHANGE_NAME,
+            "",
+            null,
+            gson.toJson(message).getBytes(StandardCharsets.UTF_8));
         System.out.println(" [x] Sent '" + message + "'");
 
         res.setStatus(HttpServletResponse.SC_CREATED);
         res.getWriter().write("Lift ride created!");
 
         pool.add(channel);
+        System.out.println(pool.size());
       } catch (InterruptedException e) {
         e.printStackTrace();
       }
@@ -216,7 +225,8 @@ public class SkiersServlet extends HttpServlet {
    * @param skierID The skier ID value, obtained from the URL of the request.
    * @return A new JsonObject containing the information that will be sent to the queue.
    */
-  private JsonObject createMessage(JsonObject body, Integer skierID, Integer day, Integer seasonID) {
+  private JsonObject createMessage(
+      JsonObject body, Integer skierID, Integer day, Integer seasonID, Integer resortID) {
     JsonObject message = new JsonObject();
     message.add("time", body.get("time"));
     message.add("liftID", body.get("liftID"));
@@ -224,6 +234,7 @@ public class SkiersServlet extends HttpServlet {
     message.add("skierID", new JsonPrimitive(skierID));
     message.add("day", new JsonPrimitive(day));
     message.add("seasonID", new JsonPrimitive(seasonID));
+    message.add("resortID", new JsonPrimitive(resortID));
 
     return message;
   }

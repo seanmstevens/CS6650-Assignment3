@@ -10,17 +10,18 @@ import redis.clients.jedis.Jedis;
 /** Class representing a runnable task that receives messages from a queue and processes them. */
 public class ConsumerRunnable implements Runnable {
 
-  private final String queueName;
+  private final String exchangeName;
   private final Connection conn;
+  private static final String QUEUE_NAME = "skiers";
 
   /**
    * Constructor for ConsumerRunnable class.
    *
-   * @param queueName The name of the queue from which messages will be retrieved.
+   * @param exchangeName The name of the exchange from which messages will be retrieved.
    * @param conn The RabbitMQ connection from which a channel will be created.
    */
-  public ConsumerRunnable(String queueName, Connection conn) {
-    this.queueName = queueName;
+  public ConsumerRunnable(String exchangeName, Connection conn) {
+    this.exchangeName = exchangeName;
     this.conn = conn;
   }
 
@@ -33,7 +34,10 @@ public class ConsumerRunnable implements Runnable {
 
       // Connect a channel to the queue. Configuration must be identical to channels created
       // on the server
-      channel.queueDeclare(queueName, false, false, false, null);
+      channel.exchangeDeclare(exchangeName, "fanout");
+      channel.queueDeclare(QUEUE_NAME, false, false, false, null);
+      channel.queueBind(QUEUE_NAME, exchangeName, "");
+
       System.out.println(
           " [*] Thread " + Thread.currentThread().getId() + " waiting for messages.");
 
@@ -42,10 +46,19 @@ public class ConsumerRunnable implements Runnable {
       final DeliverCallback callback =
           (consumerTag, delivery) -> {
             String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            JsonObject body;
+            String key;
+            JsonObject data = new JsonObject();
 
             try {
-              body = Consumer.gson.fromJson(message, JsonObject.class);
+              JsonObject body = Consumer.gson.fromJson(message, JsonObject.class);
+              key = body.get("skierID").getAsString();
+
+              data.add("liftID", body.get("liftID"));
+              data.add("time", body.get("time"));
+              data.add("waitTime", body.get("waitTime"));
+              data.add("day", body.get("day"));
+              data.add("seasonID", body.get("seasonID"));
+              data.add("resortID", body.get("resortID"));
             } catch (JsonSyntaxException jse) {
               System.err.println("Message contained invalid JSON formatting");
               channel.basicReject(delivery.getEnvelope().getDeliveryTag(), false);
@@ -58,39 +71,8 @@ public class ConsumerRunnable implements Runnable {
 
             // Extract parameters to be stored in map. No need to validate as validation has
             // already been performed on the server prior to publishing the message
-
-            // If collection of lift ID values exists for this skier, append. Otherwise, create a
-            // new queue and put it to the map. Add the lift ID in either case
             try (Jedis jedis = Consumer.pool.getResource()) {
-              jedis.incrBy(
-                  String.join(
-                      ":",
-                      new String[] {
-                        "skierDaysTotalPerSeason",
-                        body.get("skierID").getAsString(),
-                        body.get("seasonID").getAsString()
-                      }),
-                  1);
-
-              jedis.incrBy(
-                  String.join(
-                      ":",
-                      new String[] {
-                        "skierVerticalTotalPerDay",
-                        body.get("skierID").getAsString(),
-                        body.get("day").getAsString()
-                      }),
-                  Long.parseLong(body.get("liftID").getAsString()) * 10);
-
-              jedis.sadd(
-                  String.join(
-                      ":",
-                      new String[] {
-                        "skierLiftSetPerDay",
-                        body.get("skierID").getAsString(),
-                        body.get("day").getAsString()
-                      }),
-                  body.get("liftID").getAsString());
+              jedis.sadd(key, Consumer.gson.toJson(data));
             }
 
             // Manual acknowledgments are used in this configuration because we want to ensure
@@ -99,7 +81,7 @@ public class ConsumerRunnable implements Runnable {
             channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
           };
 
-      channel.basicConsume(queueName, autoAck, callback, consumerTag -> {});
+      channel.basicConsume(QUEUE_NAME, autoAck, callback, consumerTag -> {});
     } catch (IOException e) {
       e.printStackTrace();
     }

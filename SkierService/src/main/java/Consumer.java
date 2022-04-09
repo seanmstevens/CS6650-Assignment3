@@ -13,10 +13,11 @@ import redis.clients.jedis.Protocol;
 
 public class Consumer {
 
-  protected static final String QUEUE_NAME = "liftride";
+  protected static final String EXCHANGE_NAME = "liftride";
   protected static final Gson gson = new GsonBuilder().setPrettyPrinting().create();
-  protected static final JedisPool pool = new JedisPool(getPoolConfig(), Protocol.DEFAULT_HOST, 6379);
-  private static final Integer NUM_THREADS = 100;
+  protected static final JedisPool pool =
+      new JedisPool(getPoolConfig(), Protocol.DEFAULT_HOST, 6379);
+  private static final Integer NUM_THREADS = 128;
 
   public static void main(String[] args) throws IOException, TimeoutException {
     ConnectionFactory factory = new ConnectionFactory();
@@ -31,7 +32,7 @@ public class Consumer {
     ExecutorService executorService = Executors.newFixedThreadPool(NUM_THREADS);
 
     for (int i = 0; i < NUM_THREADS; i++) {
-      executorService.execute(new ConsumerRunnable(QUEUE_NAME, connection));
+      executorService.execute(new ConsumerRunnable(EXCHANGE_NAME, connection));
     }
   }
 
